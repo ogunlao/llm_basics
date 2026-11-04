@@ -1,7 +1,7 @@
 [project]
 name = "llm_basics"
 version = "26.0.0"
-description = "From-scratch implementation of a decoder-only (GPT-2 style) LLM"
+description = "From-scratch implementation of a decoder-only dense and MOE LLM models"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
