@@ -138,6 +138,7 @@ def train(config):
             train_loss = train_loss.item()
             logging.info(f"Train loss at step {step}: {train_loss:.2f}")
             print(f"{step},{"train_loss"},{train_loss}", file=file_writer)
+            model.eval()
             val_loss = 0.0
             if config.do_validation and (step + 1) % save_every == 0:
                 val_loss = torch.tensor([0.0], device=config.device)
@@ -150,7 +151,7 @@ def train(config):
                     val_loss /= float(config.validation_steps)
                     logging.info(f"validation loss at step {step}: {val_loss:.2f}")
                     print(f"{step},{"validation_loss"},{val_loss}", file=file_writer)
-
+            model.train()
             if (step + 1) % save_every == 0:
                 output_file = f"{config.name}_model_ckpt_{time.time()}_step={step + 1}_val_loss={val_loss}.pt"
                 full_save_path = os.path.join(config.checkpoint_path, output_file)

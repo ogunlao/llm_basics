@@ -15,7 +15,7 @@ from llm_basics.layers import Embedding
 
 
 class SwitchBlock(nn.Module):
-    def __init__(self, num_experts: int, capacity_factor: float, d_model: int, num_heads: int, d_ff: int, rope_emb: nn.Module | None, jitter_noise: float = 1e-2, device: torch.device | None=None, dtype: torch.dtype | None=None,):
+    def __init__(self, num_experts: int, capacity_factor: float | None, d_model: int, num_heads: int, d_ff: int, rope_emb: nn.Module | None, jitter_noise: float = 1e-2, device: torch.device | None=None, dtype: torch.dtype | None=None,):
         super().__init__()
         self.rms_norm1 = RMSNorm(d_model, device=device, dtype=dtype)
         self.mhsa = MHSA(d_model, num_heads, rope_emb, device=device, dtype=dtype)
@@ -32,10 +32,12 @@ class SwitchBlock(nn.Module):
         x = rearrange(x, "batch seq_len d_model -> (batch seq_len) d_model")
         
         num_tokens = batch * seq_len
-        capacity = math.ceil(num_tokens * self.capacity_factor / len(self.experts))
+        capacity = None
+        if self.capacity_factor is not None:
+            capacity = math.ceil(num_tokens * self.capacity_factor / len(self.experts))
 
         x_router = x.to(torch.float32)
-        if self.training:
+        if self.training and self.jitter_noise:
             # Add some noise for exploration across experts
             random_noise = torch.zeros_like(x_router).uniform_(1 - self.jitter_noise, 1 + self.jitter_noise)
             x_router = x_router * random_noise.to(x_router.device)
@@ -60,7 +62,7 @@ class SwitchBlock(nn.Module):
                 continue
             expert_indices = torch.nonzero(expert_mask, as_tuple=False).squeeze(-1)
             probs = routing_max_prob[expert_indices]
-            if len(expert_indices) > capacity:
+            if self.training and self.capacity_factor is not None and len(expert_indices) > capacity:
                 # Route by highest confidence scores on routing probability
                 probs = routing_max_prob[expert_indices]
                 sorted_order = torch.argsort(probs, descending=True)
@@ -107,7 +109,7 @@ class SwitchBlock(nn.Module):
 
 
 class SwitchTransformerLM(nn.Module):
-    def __init__(self, num_experts: int, capacity_factor: float, vocab_size: int, num_layers: int, d_model: int, num_heads: int, d_ff: int, context_length: int, theta: float | None=None, jitter_noise: float = 1e-2, device: torch.device | None=None, dtype: torch.dtype | None=None):
+    def __init__(self, num_experts: int, capacity_factor: float | None, vocab_size: int, num_layers: int, d_model: int, num_heads: int, d_ff: int, context_length: int, theta: float | None=None, jitter_noise: float = 1e-2, device: torch.device | None=None, dtype: torch.dtype | None=None):
         super().__init__()
         self.emb = Embedding(vocab_size, d_model, device, dtype)
         self.rope_emb = None

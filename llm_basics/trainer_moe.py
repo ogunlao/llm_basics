@@ -36,7 +36,7 @@ def init_layer(m):
 class ModelConfig:
     name: str = "default"
     num_experts: int = 2
-    capacity_factor: float = 1.2
+    capacity_factor: float | None = None
     aux_loss_weight: float = 1e-2
     jitter_noise: float = 1e-2
 
@@ -168,6 +168,8 @@ def train(config):
             if config.do_validation and (step + 1) % save_every == 0:
                 val_loss = torch.tensor([0.0], device=config.device)
                 val_aux_loss = torch.tensor([0.0], device=config.device)
+                # Eval mode disables expert capacity and router jitter noise
+                model.eval()
                 with torch.no_grad():
                     for _ in range(config.validation_steps):
                         val_inputs, val_target = get_batch(valid_dataset, config.batch_size, config.context_length, config.device)
@@ -182,6 +184,7 @@ def train(config):
                     logging.info(f"validation loss at step {step}: {val_loss:.2f}")
                     print(f"{step},{"validation_loss"},{val_loss}", file=file_writer)
                     print(f"{step},{"validation_aux_loss"},{val_aux_loss}", file=file_writer)
+                model.train()
 
             if (step + 1) % save_every == 0:
                 output_file = f"{config.name}_model_ckpt_{time.time()}_step={step + 1}_val_loss={val_loss}.pt"
