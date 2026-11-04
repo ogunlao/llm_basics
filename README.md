@@ -17,7 +17,7 @@ llm_basics/
 ├── train_utils.py          # Cross-entropy, AdamW, LR schedule, gradient clipping, batching, checkpoints
 ├── trainer_dense.py        # Training loop for the dense model (entry point)
 ├── trainer_moe.py          # Training loop for the MoE model (entry point)
-├── decoding.py             # Text generation from a trained dense checkpoint (entry point)
+├── decoding.py             # Text generation from a trained dense or MoE checkpoint (entry point)
 ├── config/                 # Model/training and decoding configs
 └── tokenizer_training/     # Scripts to train the tokenizer and pre-encode datasets
 ```
@@ -82,6 +82,11 @@ Notes on the training configs (`tiny_stories_config.json`, `tiny_stories_moe_con
 First set `checkpoint_path` in `llm_basics/config/tiny_stories_decoding_config.json` to a checkpoint from `checkpoints/tiny_stories/`, then run
 ```sh
 uv run llm_basics/decoding.py "<PREFIX_TEXT>" "llm_basics/config/tiny_stories_config.json" "llm_basics/config/tiny_stories_decoding_config.json"
+```
+
+For the MoE model, set `checkpoint_path` to a checkpoint from `checkpoints/tiny_stories_moe/` and pass the MoE config instead. The model type is picked from the config (a config with `num_experts` loads the MoE model)
+```sh
+uv run llm_basics/decoding.py "<PREFIX_TEXT>" "llm_basics/config/tiny_stories_moe_config.json" "llm_basics/config/tiny_stories_decoding_config.json"
 ```
 
 The example can be adapted to train on OpenWebText or other datasets (see `llm_basics/tokenizer_training/train_bpe_expts_owt.py`).

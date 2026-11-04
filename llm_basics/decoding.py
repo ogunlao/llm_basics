@@ -5,7 +5,9 @@ import logging
 import torch
 from einops import rearrange
 from llm_basics.trainer_dense import ModelConfig
+from llm_basics.trainer_moe import ModelConfig as MoEModelConfig
 from llm_basics.layers import TransformerLM
+from llm_basics.layers import SwitchTransformerLM
 from llm_basics.tokenizer.load_bpe import Tokenizer
 from llm_basics.layers import softmax
 from llm_basics.train_utils import load_checkpoint
@@ -27,13 +29,26 @@ def load_tokenizer(decoding_config):
     bpe_tokenizer = Tokenizer.from_files(decoding_config.vocab_filepath, decoding_config.merges_filepath, ["<|endoftext|>"])
     return bpe_tokenizer
 
-def decode(prefix: str, config: ModelConfig, decoding_config: DecodingConfig) -> str:
+def load_model(config: ModelConfig | MoEModelConfig, checkpoint_path: str) -> torch.nn.Module:
+    if isinstance(config, MoEModelConfig):
+        model = SwitchTransformerLM(
+            config.num_experts, config.capacity_factor,
+            config.vocab_size, config.num_layers, config.d_model, config.num_heads,
+            config.d_ff, config.context_length, config.theta,
+            jitter_noise=config.jitter_noise, device=config.device,
+        )
+    else:
+        model = TransformerLM(
+            config.vocab_size, config.num_layers, config.d_model, config.num_heads,
+            config.d_ff, config.context_length, config.theta, config.device,
+        )
+    _ = load_checkpoint(checkpoint_path, model, None, config.device)
+    model.eval()
+    return model
+
+def decode(prefix: str, config: ModelConfig | MoEModelConfig, decoding_config: DecodingConfig) -> str:
     logging.debug("Loading model ...")
-    model = TransformerLM(
-        config.vocab_size, config.num_layers, config.d_model, config.num_heads, 
-        config.d_ff, config.context_length, config.theta, config.device,
-    )
-    _ = load_checkpoint(decoding_config.checkpoint_path, model, None, config.device)
+    model = load_model(config, decoding_config.checkpoint_path)
 
     softmax_temperature = decoding_config.softmax_temperature
     max_tokens = decoding_config.max_tokens
@@ -53,6 +68,9 @@ def decode(prefix: str, config: ModelConfig, decoding_config: DecodingConfig) ->
         _tokens = _tokens[:, -config.context_length:]
         with torch.no_grad():
             logits = model(_tokens)
+            if isinstance(logits, tuple):
+                # MoE model also returns the auxiliary load-balancing loss
+                logits, _ = logits
             logits = logits[:, -1, :]
             if softmax_temperature == 0:
                 # pick the most likely token
@@ -103,7 +121,7 @@ if __name__ == "__main__":
     model_config_path = args.config
     with open(model_config_path) as file_read:
         config_dict = json.load(file_read)
-    model_config = ModelConfig()
+    model_config = MoEModelConfig() if "num_experts" in config_dict else ModelConfig()
     model_config.update_from_dict(config_dict)
     print(model_config)
 
