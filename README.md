@@ -1,18 +1,23 @@
-# From Scratch Implementation of Decoder-Style LLM like GPT-2
+# From Scratch Implementation of Decoder-Style LLM. 
 
-It includes a byte-level BPE tokenizer, a Transformer LM (RMSNorm, SwiGLU, RoPE, causal multi-head self-attention), an AdamW optimizer, a cosine learning-rate schedule, gradient clipping, a training loop with checkpointing, and top-p decoding.
+It includes a byte-level BPE tokenizer, a Transformer LM (RMSNorm, SwiGLU, RoPE, causal multi-head self-attention), Switch Transformer MOE LLM, an AdamW optimizer, a cosine learning-rate schedule, gradient clipping, a training loop with checkpointing, and top-p decoding.
 
 ## Project structure
 
 ```
 llm_basics/
+├── layers/
+│   ├── layers.py           # Linear, Embedding, RMSNorm, SwiGLU, RoPE, attention, TransformerLM
+│   └── moe_layers.py       # Switch Transformer MoE block and SwitchTransformerLM
+├── tokenizer/
+│   ├── load_bpe.py         # Tokenizer: encode / decode using a trained vocab + merges
+│   ├── text_loading.py     # Parallel, chunked pre-tokenization of large text files
+│   └── text_loading_slow.py # Serial reference version of the pre-tokenization
 ├── train_bpe.py            # BPE tokenizer training (fast heap-based + slow reference version)
-├── load_bpe.py             # Tokenizer: encode / decode using a trained vocab + merges
-├── text_loading.py         # Parallel, chunked pre-tokenization of large text files
-├── layers.py               # Linear, Embedding, RMSNorm, SwiGLU, RoPE, attention, TransformerLM
-├── training.py             # Cross-entropy, AdamW, LR schedule, gradient clipping, batching, checkpoints
-├── trainer.py              # Training loop (entry point)
-├── decoding.py             # Text generation from a trained checkpoint (entry point)
+├── train_utils.py          # Cross-entropy, AdamW, LR schedule, gradient clipping, batching, checkpoints
+├── trainer_dense.py        # Training loop for the dense model (entry point)
+├── trainer_moe.py          # Training loop for the MoE model (entry point)
+├── decoding.py             # Text generation from a trained dense checkpoint (entry point)
 ├── config/                 # Model/training and decoding configs
 └── tokenizer_training/     # Scripts to train the tokenizer and pre-encode datasets
 ```
@@ -57,13 +62,19 @@ Then, pre-encode the train/validation data into `data/TinyStoriesV2-GPT4-{train,
 uv run llm_basics/tokenizer_training/encode_data.py
 ```
 
-### Train a small model on the TinyStories dataset
+### Train a small dense model on the TinyStories dataset
 ```sh
-uv run llm_basics/trainer.py "llm_basics/config/tiny_stories_config.json"
+uv run llm_basics/trainer_dense.py "llm_basics/config/tiny_stories_config.json"
 ```
 Checkpoints and training logs are written to `checkpoints/tiny_stories/`.
 
-Notes on `llm_basics/config/tiny_stories_config.json`:
+### Train a small MOE-style model on the TinyStories dataset
+```sh
+uv run llm_basics/trainer_moe.py "llm_basics/config/tiny_stories_moe_config.json"
+```
+Checkpoints and training logs are written to `checkpoints/tiny_stories_moe/`.
+
+Notes on the training configs (`tiny_stories_config.json`, `tiny_stories_moe_config.json`):
 - `device` is set to `"mps"` (Apple Silicon). Change it to `"cuda"` or `"cpu"` for other hardware.
 - To resume training, set `resume_from_checkpoint` to the path of a saved `.pt` checkpoint.
 
@@ -75,4 +86,4 @@ uv run llm_basics/decoding.py "<PREFIX_TEXT>" "llm_basics/config/tiny_stories_co
 
 The example can be adapted to train on OpenWebText or other datasets (see `llm_basics/tokenizer_training/train_bpe_expts_owt.py`).
 
-The implementation follows closely [Stanford CS336](https://stanford-cs336.github.io/) (Assignment 1).
+The dense layer implementation follows closely [Stanford CS336](https://stanford-cs336.github.io/) (Assignment 1) and the MOE implemented is the SwitchLayer in Switch Transformers.
