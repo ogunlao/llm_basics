@@ -1,7 +1,7 @@
 import json
 import regex as re
-from llm_basics.text_loading import get_next_token
 from typing import Iterator, Iterable
+from llm_basics.tokenizer.text_loading import get_next_token
 
 def load_vocab(path: str, encoding="utf-8",) -> dict[int, bytes]:
     with open(path, "r", encoding=encoding,) as f:

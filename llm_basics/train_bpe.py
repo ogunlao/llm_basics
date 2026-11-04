@@ -1,11 +1,11 @@
 import os
 import collections
 import heapq
-from llm_basics.text_loading import get_streaming_pretokens
-from llm_basics.text_loading_slow import read_paragraph as read_paragraph_slow
-from llm_basics.text_loading import get_merges
-from llm_basics.text_loading import replace_pretok
-from llm_basics.text_loading import get_next_token
+from llm_basics.tokenizer.text_loading import get_streaming_pretokens
+from llm_basics.tokenizer.text_loading_slow import read_paragraph as read_paragraph_slow
+from llm_basics.tokenizer.text_loading import get_merges
+from llm_basics.tokenizer.text_loading import replace_pretok
+from llm_basics.tokenizer.text_loading import get_next_token
 
 
 def compute_pretoken_bytes(pretokens) -> dict[tuple[bytes, ...], int]:
@@ -17,16 +17,18 @@ def compute_pretoken_bytes(pretokens) -> dict[tuple[bytes, ...], int]:
 
 
 def train_bpe_slow(input_path: str | os.PathLike, vocab_size: int, special_tokens: list[str] = ["<|endoftext|>"], check_result: bool=False,):
-    # Initialise default vocabulary of 256 code points
+    """This slow version helps to check for correctness when optimizing BPE training. Use train_bpe for real tokenizer training"""
+
     vocab: dict[int, bytes] = {}
 
-    # Add special tokens
+    # Add special tokens to vocab
     for idx, special_tok in enumerate(special_tokens):
         vocab[idx] = special_tok.encode("utf-8")
     last_index = 0
     if vocab:
         last_index = max(vocab.keys()) + 1
-    
+
+    # Add default vocabulary of 256 code points
     vocab: dict[int, bytes] = {last_index + idx: bytes([idx]) for idx in range(256)}
     
     next_idx: int = len(vocab)

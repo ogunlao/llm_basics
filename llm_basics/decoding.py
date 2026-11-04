@@ -3,12 +3,12 @@ import json
 from dataclasses import dataclass
 import logging
 import torch
-from llm_basics.trainer import ModelConfig
-from llm_basics.layers import TransformerLM
-from llm_basics.load_bpe import Tokenizer
-from llm_basics.layers import softmax
-from llm_basics.training import load_checkpoint
 from einops import rearrange
+from llm_basics.trainer_dense import ModelConfig
+from llm_basics.layers import TransformerLM
+from llm_basics.tokenizer.load_bpe import Tokenizer
+from llm_basics.layers import softmax
+from llm_basics.train_utils import load_checkpoint
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)

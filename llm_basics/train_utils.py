@@ -164,14 +164,14 @@ if __name__ == "__main__":
     logits = torch.randn((batch_size, seq_len, vocab_size))
 
     # Target token IDs at each position
-    # targets = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len))
+    targets = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len))
 
-    # loss = cross_entropy(logits, targets)
-    # print(loss)
+    loss = cross_entropy(logits, targets)
+    print(loss)
 
-    # loss_ = torch.nn.functional.cross_entropy(logits.transpose(-2, -1), targets)
-    # print(loss_)
-    # assert torch.allclose(loss, loss_)
+    loss_ = torch.nn.functional.cross_entropy(logits.transpose(-2, -1), targets)
+    print(loss_)
+    assert torch.allclose(loss, loss_)
 
     x = torch.randn(seq_len)
     ppl = perplexity(x)

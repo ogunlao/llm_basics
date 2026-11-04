@@ -228,7 +228,6 @@ class TransformerLM(nn.Module):
         return x
 
 
-
 if __name__ == "__main__":
     bs, seq_len, d_model = 3, 7, 8
     vocab_size = 100

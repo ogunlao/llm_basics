@@ -1,5 +1,5 @@
 import numpy as np
-from llm_basics.load_bpe import Tokenizer
+from llm_basics.tokenizer.load_bpe import Tokenizer
 
 
 def encode_data(
