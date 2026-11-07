@@ -95,10 +95,10 @@ class SwitchBlock(nn.Module):
 
         return aux_loss
 
-    def forward(self, x: Float[torch.Tensor, "batch seq_len d_model"], token_pos=None, mask=None) -> Float[torch.Tensor, "batch seq_len d_model"]:
+    def forward(self, x: Float[torch.Tensor, "batch seq_len d_model"], token_pos=None, mask=None, use_cache: bool=False) -> Float[torch.Tensor, "batch seq_len d_model"]:
         residual = x
         x = self.rms_norm1(x)
-        x = self.mhsa(x, token_pos, mask)
+        x = self.mhsa(x, token_pos, mask, use_cache=use_cache)
         x = x + residual
         residual = x
         x = self.rms_norm2(x)
@@ -119,15 +119,20 @@ class SwitchTransformerLM(nn.Module):
         self.rms_norm_final = RMSNorm(d_model, device=device, dtype=dtype)
         self.out_proj = Linear(d_model, vocab_size, device, dtype)
 
-    def forward(self, input_tokens: Int[torch.Tensor, "... seq_len"], token_pos=None, mask=None) -> Float[torch.Tensor, "... seq_len vocab_size"]:
+    def forward(self, input_tokens: Int[torch.Tensor, "... seq_len"], token_pos=None, mask=None, use_cache: bool=False) -> Float[torch.Tensor, "... seq_len vocab_size"]:
         x = self.emb(input_tokens)
         aux_losses = torch.zeros(1, device=input_tokens.device)
         for i, layer in enumerate(self.layers):
-            x, aux_loss = layer(x, token_pos, mask)
+            x, aux_loss = layer(x, token_pos, mask, use_cache=use_cache)
             aux_losses += aux_loss
         x = self.rms_norm_final(x)
         x = self.out_proj(x) # output: logits
         return x, aux_losses / len(self.layers)
+
+    @torch.no_grad()
+    def reset_kv_cache(self):
+        for layer in self.layers:
+            layer.mhsa.reset_cache()
 
 
 if __name__ == "__main__":

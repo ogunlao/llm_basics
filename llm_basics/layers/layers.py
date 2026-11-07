@@ -26,6 +26,7 @@ class Linear(nn.Module):
         """Apply the linear transformation to the input."""
         return einsum(x, self.weights, "... input_dim, output_dim input_dim -> ... output_dim")
 
+    @torch.no_grad()
     def _init_layer(self):
         rho_squared = 2 / (self.input_features + self.output_features)
         rho = rho_squared ** (0.5)
@@ -166,27 +167,64 @@ class MHSA(nn.Module):
         self.rope_emb = rope_emb
         if self.rope_emb is not None:
             self.rope_emb = self.rope_emb
+        self.register_buffer("kv_cache", None, persistent=False)
 
-    def forward(self, x: Float[torch.Tensor, "... seq_len d_model"], token_pos=None, mask=None) -> Float[torch.Tensor, "... seq_len d_model"]:
+    def forward(self, x: Float[torch.Tensor, "... seq_len d_model"], token_pos=None, mask: Bool[torch.Tensor | None, "seq_len seq_len"]=None, use_cache: bool=False) -> Float[torch.Tensor, "... seq_len d_model"]:
         seq_len = x.shape[-2]
-        if mask is None:
+
+        # Add kv caching
+        if use_cache:
+            qkv = self.qkv_proj(x)
+            qkv = rearrange(qkv, "... seq_len (three h d_k) -> three ... h seq_len d_k", h=self.num_heads, three=3)
+            q = qkv[0, ...]
+            kv = qkv[1:, ...]
+
+            curr_seq_len = self.kv_cache.size()[-2] if self.kv_cache is not None else 0
+            if self.rope_emb is not None:
+                k, v = kv
+                # Using RoPE embeddings
+                if token_pos is None:
+                    token_pos = torch.arange(start=curr_seq_len, end=curr_seq_len+seq_len, device=x.device)
+                token_pos= rearrange(token_pos, "... seq_len-> ... 1 seq_len")
+                q = self.rope_emb(q, token_pos)
+                k = self.rope_emb(k, token_pos)
+                kv = torch.concat([k.unsqueeze(0), v.unsqueeze(0)], dim=0)
+
+            if self.kv_cache is None:
+                self.kv_cache = kv
+            else:
+                self.kv_cache = torch.cat([self.kv_cache, kv], dim=-2)
+            
+            k, v = self.kv_cache
+
+        else:
+            qkv = self.qkv_proj(x)
+            q, k, v = rearrange(qkv, "... seq_len (three h d_k) -> three ... h seq_len d_k", h=self.num_heads, three=3)
+
+            if self.rope_emb is not None:
+                # Using RoPE embeddings
+                if token_pos is None:
+                    token_pos = torch.arange(seq_len, device=x.device)
+                token_pos= rearrange(token_pos, "... seq_len-> ... 1 seq_len")
+                q = self.rope_emb(q, token_pos)
+                k = self.rope_emb(k, token_pos)
+
+        if mask is None and not use_cache:
             mask = torch.ones((seq_len, seq_len), dtype=torch.bool, device=x.device)
             mask = torch.tril(mask, diagonal=0)
-        qkv = self.qkv_proj(x)
-        q, k, v = rearrange(qkv, "... seq_len (three h d_k) -> three ... h seq_len d_k", h=self.num_heads, three=3)
+        elif use_cache:
+            mask = torch.ones((seq_len, curr_seq_len+seq_len), dtype=torch.bool, device=x.device)
+            if curr_seq_len == 0:
+                mask = torch.tril(mask, diagonal=0)
 
-        if self.rope_emb is not None:
-            # Using RoPE embeddings
-            if token_pos is None:
-                token_pos = torch.arange(seq_len, device=x.device)
-            token_pos= rearrange(token_pos, "... seq_len-> ... 1 seq_len")
-            q = self.rope_emb(q, token_pos)
-            k = self.rope_emb(k, token_pos)
-        
         mhsa = scaled_dot_product_attention(k, q, v, mask)
         mhsa = rearrange(mhsa, "... h seq_len d_v -> ... seq_len (h d_v)")
 
         return self.o_proj(mhsa)
+
+    def reset_cache(self) -> None:
+        self.kv_cache = None
+
 
 class TransformerBlock(nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_ff: int, rope_emb: nn.Module | None, device: torch.device | None=None, dtype: torch.dtype | None=None):
@@ -196,10 +234,10 @@ class TransformerBlock(nn.Module):
         self.rms_norm2 = RMSNorm(d_model, device=device, dtype=dtype)
         self.ffn = SwiGLU(d_model, d_ff, device, dtype)
 
-    def forward(self, x: Float[torch.Tensor, "... seq_len d_model"], token_pos=None, mask=None) -> Float[torch.Tensor, "... seq_len d_model"]:
+    def forward(self, x: Float[torch.Tensor, "... seq_len d_model"], token_pos=None, mask=None, use_cache: bool=False) -> Float[torch.Tensor, "... seq_len d_model"]:
         residual = x
         x = self.rms_norm1(x)
-        x = self.mhsa(x, token_pos, mask)
+        x = self.mhsa(x, token_pos, mask, use_cache)
         x = x + residual
         residual = x
         x = self.rms_norm2(x)
@@ -219,16 +257,22 @@ class TransformerLM(nn.Module):
         self.rms_norm_final = RMSNorm(d_model, device=device, dtype=dtype)
         self.out_proj = Linear(d_model, vocab_size, device, dtype)
 
-    def forward(self, input_tokens: Int[torch.Tensor, "... seq_len"], token_pos=None, mask=None) -> Float[torch.Tensor, "... seq_len vocab_size"]:
+    def forward(self, input_tokens: Int[torch.Tensor, "... seq_len"], token_pos=None, mask=None, use_cache: bool=False,) -> Float[torch.Tensor, "... seq_len vocab_size"]:
         x = self.emb(input_tokens)
         for layer in self.layers:
-            x = layer(x, token_pos, mask)
+            x = layer(x, token_pos, mask, use_cache)
         x = self.rms_norm_final(x)
         x = self.out_proj(x) # output: logits
         return x
 
+    @torch.no_grad()
+    def reset_kv_cache(self):
+        for layer in self.layers:
+            layer.mhsa.reset_cache()
+
 
 if __name__ == "__main__":
+    import math
     bs, seq_len, d_model = 3, 7, 8
     vocab_size = 100
     device = "mps"
@@ -247,7 +291,7 @@ if __name__ == "__main__":
     y = rms_norm(x)
     assert list(y.shape) == list(x.shape)
 
-    d_ff = (8 // 3) * d_model
+    d_ff = math.ceil(((8 / 3) * d_model) / 64) * 64
     swiglu = SwiGLU(d_model, d_ff).to(device)
     y = swiglu(x.to(device))
     assert list(y.shape) == list(x.shape)
