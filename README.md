@@ -1,13 +1,13 @@
 # From Scratch Implementation of Decoder-Style LLM. 
 
-It includes a byte-level BPE tokenizer, a Transformer LM (RMSNorm, SwiGLU, RoPE, causal multi-head self-attention), Switch Transformer MOE LLM, an AdamW optimizer, a cosine learning-rate schedule, gradient clipping, a training loop with checkpointing, and top-p decoding.
+It includes a byte-level BPE tokenizer, a Transformer LM (RMSNorm, SwiGLU, RoPE, causal multi-head self-attention), Switch Transformer MOE LLM, an AdamW optimizer, a cosine learning-rate schedule, gradient clipping, a training loop with checkpointing, and greedy/top-p decoding with KV caching.
 
 ## Project structure
 
 ```
 llm_basics/
 ├── layers/
-│   ├── layers.py           # Linear, Embedding, RMSNorm, SwiGLU, RoPE, attention, TransformerLM
+│   ├── layers.py           # Linear, Embedding, RMSNorm, SwiGLU, RoPE, attention (with KV cache), TransformerLM
 │   └── moe_layers.py       # Switch Transformer MoE block and SwitchTransformerLM
 ├── tokenizer/
 │   ├── load_bpe.py         # Tokenizer: encode / decode using a trained vocab + merges
@@ -77,6 +77,7 @@ Checkpoints and training logs are written to `checkpoints/tiny_stories_moe/`.
 Notes on the training configs (`tiny_stories_config.json`, `tiny_stories_moe_config.json`):
 - `device` is set to `"mps"` (Apple Silicon). Change it to `"cuda"` or `"cpu"` for other hardware.
 - To resume training, set `resume_from_checkpoint` to the path of a saved `.pt` checkpoint.
+- For the MOE model, set `capacity_factor` to `null` to remove the expert capacity limit. The capacity limit and the router `jitter_noise` are only used in training, they are disabled during validation and decoding.
 
 ### Run inference on the trained model
 First set `checkpoint_path` in `llm_basics/config/tiny_stories_decoding_config.json` to a checkpoint from `checkpoints/tiny_stories/`, then run
@@ -89,6 +90,12 @@ For the MoE model, set `checkpoint_path` to a checkpoint from `checkpoints/tiny_
 uv run llm_basics/decoding.py "<PREFIX_TEXT>" "llm_basics/config/tiny_stories_moe_config.json" "llm_basics/config/tiny_stories_decoding_config.json"
 ```
 
+Notes on the decoding config (`tiny_stories_decoding_config.json`):
+- `softmax_temperature` set to `0.0` does greedy decoding. Set it above `0.0` to sample with `top_p` (nucleus sampling).
+- `max_tokens` is the maximum number of new tokens to generate.
+- `use_cache` turns on KV caching for both the dense and MOE models. The prefix is processed once to fill the cache, then only the last generated token is fed to the model at each step, which makes decoding faster. Greedy decoding gives the same output with or without the cache.
+- With `use_cache`, decoding stops when the sequence reaches `context_length`, as a sliding window over the cache is not supported yet. Without the cache, decoding keeps going by using the last `context_length` tokens.
+
 The example can be adapted to train on OpenWebText or other datasets (see `llm_basics/tokenizer_training/train_bpe_expts_owt.py`).
 
-The dense layer implementation follows closely [Stanford CS336](https://stanford-cs336.github.io/) (Assignment 1) and the MOE implemented is the SwitchLayer in Switch Transformers.
+The dense model is a LLaMA-style decoder (pre-norm RMSNorm, SwiGLU, RoPE) and the MOE implemented is the SwitchLayer in Switch Transformers. The project started from [Stanford CS336](https://stanford-cs336.github.io/) Assignment 1 and has since been extended with MOE and KV caching.
