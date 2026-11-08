@@ -156,7 +156,7 @@ def scaled_dot_product_attention(
 
 
 class MHSA(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, rope_emb: nn.Module | None=None, device: torch.device | None=None, dtype: torch.dtype | None=None) -> None:
+    def __init__(self, d_model: int, num_heads: int, rope_emb: nn.Module | None=None, device: torch.device | None=None, dtype: torch.dtype | None=None, context_length: int | None=None) -> None:
         super().__init__()
         self.num_heads = num_heads
         d_k = d_model // num_heads
@@ -167,35 +167,52 @@ class MHSA(nn.Module):
         self.rope_emb = rope_emb
         if self.rope_emb is not None:
             self.rope_emb = self.rope_emb
+        self.context_length = context_length
+        if self.context_length is None and self.rope_emb is not None:
+            self.context_length = self.rope_emb.max_seq_len
         self.register_buffer("kv_cache", None, persistent=False)
+        self.cache_len = 0
 
     def forward(self, x: Float[torch.Tensor, "... seq_len d_model"], token_pos=None, mask: Bool[torch.Tensor | None, "seq_len seq_len"]=None, use_cache: bool=False) -> Float[torch.Tensor, "... seq_len d_model"]:
         seq_len = x.shape[-2]
 
-        # Add kv caching
+        # Add kv caching for inference
         if use_cache:
             qkv = self.qkv_proj(x)
             qkv = rearrange(qkv, "... seq_len (three h d_k) -> three ... h seq_len d_k", h=self.num_heads, three=3)
             q = qkv[0, ...]
             kv = qkv[1:, ...]
 
-            curr_seq_len = self.kv_cache.size()[-2] if self.kv_cache is not None else 0
-            if self.rope_emb is not None:
-                k, v = kv
-                # Using RoPE embeddings
-                if token_pos is None:
-                    token_pos = torch.arange(start=curr_seq_len, end=curr_seq_len+seq_len, device=x.device)
-                token_pos= rearrange(token_pos, "... seq_len-> ... 1 seq_len")
-                q = self.rope_emb(q, token_pos)
-                k = self.rope_emb(k, token_pos)
-                kv = torch.concat([k.unsqueeze(0), v.unsqueeze(0)], dim=0)
+            assert self.context_length is not None, "context_length is needed to use the kv cache"
+            assert seq_len <= self.context_length
+            # allocate the cache once and reuse it
+            if (self.kv_cache is None 
+                or self.kv_cache.shape[:-2] != kv.shape[:-2] 
+                or self.kv_cache.dtype != kv.dtype
+                ):
+                self.kv_cache = torch.empty((*kv.shape[:-2], self.context_length, kv.shape[-1]), dtype=kv.dtype, device=kv.device)
+                self.cache_len = 0
 
-            if self.kv_cache is None:
-                self.kv_cache = kv
-            else:
-                self.kv_cache = torch.cat([self.kv_cache, kv], dim=-2)
-            
-            k, v = self.kv_cache
+            # drop the oldest tokens so the new ones fit in the cache
+            curr_seq_len = min(self.cache_len, self.context_length - seq_len)
+            if curr_seq_len < self.cache_len:
+                start = self.cache_len - curr_seq_len
+                self.kv_cache[..., :curr_seq_len, :] = self.kv_cache[..., start:self.cache_len, :].clone()
+            self.kv_cache[..., curr_seq_len:curr_seq_len+seq_len, :] = kv
+            self.cache_len = curr_seq_len + seq_len
+
+            k, v = self.kv_cache[..., :self.cache_len, :]
+
+            if self.rope_emb is not None:
+                # cannot exceed max len of rope embeddings
+                assert curr_seq_len + seq_len <= self.rope_emb.max_seq_len
+                # Using RoPE embeddings
+                token_pos_k = torch.arange(curr_seq_len+seq_len, device=x.device)
+                token_pos_q = torch.arange(start=curr_seq_len, end=curr_seq_len+seq_len, device=x.device)
+                token_pos_k = rearrange(token_pos_k, "... seq_len -> ... 1 seq_len")
+                token_pos_q = rearrange(token_pos_q, "... seq_len -> ... 1 seq_len")
+                q = self.rope_emb(q, token_pos_q)
+                k = self.rope_emb(k, token_pos_k)
 
         else:
             qkv = self.qkv_proj(x)
@@ -223,14 +240,15 @@ class MHSA(nn.Module):
         return self.o_proj(mhsa)
 
     def reset_cache(self) -> None:
-        self.kv_cache = None
+        # keep the allocated memory, only forget the cached tokens
+        self.cache_len = 0
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, rope_emb: nn.Module | None, device: torch.device | None=None, dtype: torch.dtype | None=None):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, rope_emb: nn.Module | None, device: torch.device | None=None, dtype: torch.dtype | None=None, context_length: int | None=None):
         super().__init__()
         self.rms_norm1 = RMSNorm(d_model, device=device, dtype=dtype)
-        self.mhsa = MHSA(d_model, num_heads, rope_emb, device=device, dtype=dtype)
+        self.mhsa = MHSA(d_model, num_heads, rope_emb, device=device, dtype=dtype, context_length=context_length)
         self.rms_norm2 = RMSNorm(d_model, device=device, dtype=dtype)
         self.ffn = SwiGLU(d_model, d_ff, device, dtype)
 
@@ -253,7 +271,7 @@ class TransformerLM(nn.Module):
         if theta is not None:
             self.rope_emb = RotaryPositionalEmbedding(theta, d_model//num_heads, context_length, device)
         self.layers = nn.ModuleList(
-            TransformerBlock(d_model, num_heads, d_ff, self.rope_emb, device, dtype) for _ in range(num_layers))
+            TransformerBlock(d_model, num_heads, d_ff, self.rope_emb, device, dtype, context_length) for _ in range(num_layers))
         self.rms_norm_final = RMSNorm(d_model, device=device, dtype=dtype)
         self.out_proj = Linear(d_model, vocab_size, device, dtype)
 

@@ -93,8 +93,8 @@ uv run llm_basics/decoding.py "<PREFIX_TEXT>" "llm_basics/config/tiny_stories_mo
 Notes on the decoding config (`tiny_stories_decoding_config.json`):
 - `softmax_temperature` set to `0.0` does greedy decoding. Set it above `0.0` to sample with `top_p` (nucleus sampling).
 - `max_tokens` is the maximum number of new tokens to generate.
-- `use_cache` turns on KV caching for both the dense and MOE models. The prefix is processed once to fill the cache, then only the last generated token is fed to the model at each step, which makes decoding faster. Greedy decoding gives the same output with or without the cache.
-- With `use_cache`, decoding stops when the sequence reaches `context_length`, as a sliding window over the cache is not supported yet. Without the cache, decoding keeps going by using the last `context_length` tokens.
+- `use_cache` turns on KV caching for both the dense and MOE models.
+- Greedy decoding gives the same output with or without the cache until the sequence reaches `context_length`. After that, the outputs can differ.
 
 The example can be adapted to train on OpenWebText or other datasets (see `llm_basics/tokenizer_training/train_bpe_expts_owt.py`).
 

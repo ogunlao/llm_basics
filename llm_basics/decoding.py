@@ -102,9 +102,6 @@ def decode(prefix: str, config: ModelConfig, dec_config: DecodingConfig) -> str:
     warmed_up_cache = False
     while True:
         with torch.no_grad():
-            if dec_config.use_cache and tokens.size()[-1] >= config.context_length:
-                logging.info("Stopping as caching larger than context length is not supported yet.")
-                break
             _tokens = tokens[:, -config.context_length:]
             
             if dec_config.use_cache and not warmed_up_cache:
