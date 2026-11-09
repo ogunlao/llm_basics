@@ -165,8 +165,6 @@ class MHSA(nn.Module):
         self.qkv_proj = Linear(d_model, total_dim, device=device, dtype=dtype)
         self.o_proj = Linear(int(num_heads * d_v), d_model, device=device, dtype=dtype)
         self.rope_emb = rope_emb
-        if self.rope_emb is not None:
-            self.rope_emb = self.rope_emb
         self.context_length = context_length
         if self.context_length is None and self.rope_emb is not None:
             self.context_length = self.rope_emb.max_seq_len

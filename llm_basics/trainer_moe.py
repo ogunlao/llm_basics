@@ -72,6 +72,7 @@ class ModelConfig:
     do_validation: bool = True
     validation_steps: int | None = 20
     resume_from_checkpoint: str | None = None
+    z_loss_weight: float | None = None # 1e-4 / 1e-5
 
     def update_from_dict(self, data: dict[str, Any]) -> None:
         valid_names = {f.name for f in fields(self)}
@@ -140,14 +141,22 @@ def train(config):
 
             train_losses = []
             train_aux_losses = []
+            z_losses = []
             for i in range(config.grad_accumulation):
                 inputs, target = get_batch(train_dataset, config.batch_size, config.context_length, config.device)
                 logits, train_aux_loss = model(inputs, mask=mask)
-                train_loss = cross_entropy(logits, target)
+                ce = cross_entropy(logits, target, config.z_loss_weight is not None)
+
+                train_loss = ce.loss
                 train_loss /= float(config.grad_accumulation)
                 train_aux_loss /= float(config.grad_accumulation)
                 total_train_loss = train_loss + config.aux_loss_weight * train_aux_loss
-
+                if config.z_loss_weight is not None:
+                    z_loss = ce.z_loss
+                    z_loss /= float(config.grad_accumulation)
+                    total_train_loss += config.z_loss_weight * z_loss
+                    z_losses.append(z_loss.detach())
+                
                 # Scale loss
                 total_train_loss.backward()
                 train_losses.append(train_loss.detach())
@@ -164,6 +173,10 @@ def train(config):
             logging.info(f"Train loss at step {step}: {train_loss:.2f}")
             print(f"{step},{"train_loss"},{train_loss}", file=file_writer)
             print(f"{step},{"train_aux_loss"},{train_aux_loss}", file=file_writer)
+            if z_losses:
+                z_loss = torch.stack(z_losses).sum(dim=0)
+                print(f"{step},{"z_loss"},{z_loss.item()}", file=file_writer)
+
             val_loss = 0.0
             if config.do_validation and (step + 1) % save_every == 0:
                 val_loss = torch.tensor([0.0], device=config.device)
@@ -174,7 +187,8 @@ def train(config):
                     for _ in range(config.validation_steps):
                         val_inputs, val_target = get_batch(valid_dataset, config.batch_size, config.context_length, config.device)
                         val_logits, validation_aux_loss = model(val_inputs, mask=mask)
-                        val_loss += cross_entropy(val_logits, val_target)
+                        _val_loss = cross_entropy(val_logits, val_target)
+                        val_loss += _val_loss.loss
                         val_aux_loss += validation_aux_loss
 
                     val_loss = val_loss.item()

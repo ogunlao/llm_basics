@@ -2,10 +2,7 @@ import os
 import collections
 import heapq
 from llm_basics.tokenizer.text_loading import get_streaming_pretokens
-from llm_basics.tokenizer.text_loading_slow import read_paragraph as read_paragraph_slow
 from llm_basics.tokenizer.text_loading import get_merges
-from llm_basics.tokenizer.text_loading import replace_pretok
-from llm_basics.tokenizer.text_loading import get_next_token
 
 
 def compute_pretoken_bytes(pretokens) -> dict[tuple[bytes, ...], int]:
@@ -15,51 +12,6 @@ def compute_pretoken_bytes(pretokens) -> dict[tuple[bytes, ...], int]:
         pretok_rep[pt_tuple] = count
     return pretok_rep
 
-
-def train_bpe_slow(input_path: str | os.PathLike, vocab_size: int, special_tokens: list[str] = ["<|endoftext|>"], check_result: bool=False,):
-    """This slow version helps to check for correctness when optimizing BPE training. Use train_bpe for real tokenizer training"""
-
-    vocab: dict[int, bytes] = {}
-
-    # Add special tokens to vocab
-    for idx, special_tok in enumerate(special_tokens):
-        vocab[idx] = special_tok.encode("utf-8")
-    last_index = 0
-    if vocab:
-        last_index = max(vocab.keys()) + 1
-
-    # Add default vocabulary of 256 code points
-    vocab: dict[int, bytes] = {last_index + idx: bytes([idx]) for idx in range(256)}
-    
-    next_idx: int = len(vocab)
-    rem_merges: int = vocab_size - next_idx
-    
-    if rem_merges <= 0:
-        return vocab, []
-
-    # store the split words/pretokens efficiently
-    pretokens: dict[str, int] = collections.defaultdict(int)
-    for text in read_paragraph_slow(input_path, special_tokens):
-        if not text:
-            continue
-        for _match in get_next_token(text):
-            tok = _match.group()
-            pretokens[tok] += 1
-
-    pretok_byte_rep: dict[tuple[bytes, ...], int] = compute_pretoken_bytes(pretokens)
-    merge_list = []
-    for i in range(rem_merges):
-        # perform merges
-        merges, _ = get_merges(pretok_byte_rep)
-        if not merges:
-            break
-        max_byte: tuple[bytes, bytes] = max(merges.keys(), key=lambda x: (merges[x], x))
-        # update merge list
-        merge_list.append(max_byte)
-        pretok_byte_rep = replace_pretok(pretok_byte_rep, max_byte)
-    for i in range(len(merge_list)):
-        vocab[next_idx + i] = b"".join(merge_list[i])
-    return vocab, merge_list
 
 class Merge:
     __slots__ = ("merge", "count")
@@ -75,9 +27,7 @@ def train_bpe(input_path: str | os.PathLike,
               special_tokens: list[str] = ["<|endoftext|>"],
               num_processes: int=4, 
               chunk_size_mb: int=32, 
-              check_result: bool=False,
     ):
-    # Initialise default vocabulary of 256 code points
     # Initialise default vocabulary of 256 code points
     vocab: dict[int, bytes] = {}
     merge_list = []
@@ -139,11 +89,6 @@ def train_bpe(input_path: str | os.PathLike,
         if not merges:
             break
         max_byte_pair: tuple[bytes, bytes] | None = get_max_byte(merges)
-        
-        if check_result:
-            # Check implementation with slow version of max
-            max_byte_slow: tuple[bytes, bytes] = max(merges.keys(), key=lambda x: (merges[x], x))
-            assert max_byte_pair == max_byte_slow
 
         if max_byte_pair is None:
             break
@@ -219,11 +164,6 @@ def train_bpe(input_path: str | os.PathLike,
         for byte_tuple in merges_to_update:
             if byte_tuple in merges and merges[byte_tuple] > 0:
                 heapq.heappush(merges_heap, Merge(byte_tuple, merges[byte_tuple]))
-        
-        if check_result:
-            merges_slow, merges_to_string_slow = get_merges(pretoken_count)
-            assert merges_slow == merges
-            assert merges_to_string_slow == merges_tracker
 
         merge_list.append(max_byte_pair)
 
@@ -238,13 +178,6 @@ if __name__ == "__main__":
     special_tokens = ["<|endoftext|>"]
     num_processes = os.cpu_count() or 1
 
-    # Checks that the basic functionality of the slow BPE implementation 
-    # matches the fast BPE implementation with no regression during optimisation
-    check_result = False
-    if check_result:
-        vocab_slow, merge_list_slow = train_bpe_slow(path, vocab_size)
-        # assert merge_list_slow == [(b's', b't'), (b'e', b'st'), (b'o', b'w'), (b'l', b'ow'), (b'w', b'est'), (b'n', b'e'), (b'ne', b'west'), (b' ', b'newest'), (b' ', b'low'), (b'w', b'i'), (b'wi', b'd'), (b'wid', b'est'), (b' ', b'widest'), (b'e', b'r'), (b' low', b'er')]
-
     # Check which memory chunk size is suitable for the current dataset
     profile_it = False
     if profile_it:
@@ -253,15 +186,11 @@ if __name__ == "__main__":
         file_path = "data/TinyStoriesV2-GPT4-valid.txt"
         for size_mb in target_sizes:
             start_time = time.perf_counter()
-            train_bpe(path, vocab_size, check_result=check_result, num_processes=num_processes, chunk_size_mb=size_mb)
+            train_bpe(path, vocab_size, num_processes=num_processes, chunk_size_mb=size_mb)
             elapsed = time.perf_counter() - start_time
             print(f"Target Chunk Size: {size_mb} MB | Chunks: | Time: {elapsed:.2f}s")
 
-    vocab, merge_list = train_bpe(path, vocab_size, check_result=check_result, num_processes=num_processes, chunk_size_mb=4)
-
-    if check_result:
-        assert merge_list == merge_list_slow
-        assert vocab_slow == vocab
+    vocab, merge_list = train_bpe(path, vocab_size, num_processes=num_processes, chunk_size_mb=4)
 
 
 

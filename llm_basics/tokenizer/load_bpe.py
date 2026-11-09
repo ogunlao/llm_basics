@@ -1,6 +1,8 @@
 import json
 import regex as re
-from typing import Iterator, Iterable
+from collections import OrderedDict
+from typing import Iterable
+from typing import Iterator
 from llm_basics.tokenizer.text_loading import get_next_token
 
 def load_vocab(path: str, encoding="utf-8",) -> dict[int, bytes]:
@@ -8,12 +10,12 @@ def load_vocab(path: str, encoding="utf-8",) -> dict[int, bytes]:
         loaded_json = json.load(f)
         return {int(k): v.encode("latin-1") for k, v in loaded_json.items()}
 
+
 def load_merges(path: str, encoding="utf-8",) -> list[tuple[bytes, bytes]]:
     with open(path, "r", encoding=encoding) as f:
         loaded = json.load(f)
         return [(tk1.encode("latin-1"), tk2.encode("latin-1")) for tk1, tk2 in loaded]
-
-from collections import OrderedDict
+    
 
 class LRUCache:
     def __init__(self, capacity: int):
@@ -35,6 +37,7 @@ class LRUCache:
         # Éviction du premier élément (le moins récemment utilisé) si dépassement
         if len(self.cache) > self.capacity:
             self.cache.popitem(last=False)
+
 
 class Tokenizer:
     def __init__(self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None=None):
@@ -177,20 +180,17 @@ if __name__ == "__main__":
     bpe_tokenizer = Tokenizer.from_files(vocab_filepath, merges_filepath, ["<|endoftext|>", "<|pad|>"])
     text = ""
     with open("data/TinyStoriesV2-GPT4-valid.txt") as f:
-        # lines = f.readlines()
         i = 0
         for line in f:
-            # all_lines.append(line)
             text += line
             i += 1
 
             if i == 10000: break
-    # bpe_tokenizer.encode(text)
+
     assert text == bpe_tokenizer.decode(bpe_tokenizer.encode(text))
     all_lines = []
     lines = ""
     with open("data/sample_text.txt") as f:
-        # lines = f.readlines()
         for line in f:
             all_lines.append(line)
             lines += line

@@ -29,5 +29,6 @@
  "grad_accumulation": 1,
  "do_validation": true,
  "validation_steps": 50,
- "resume_from_checkpoint": null
+ "resume_from_checkpoint": null,
+ "z_loss_weight": null
 }

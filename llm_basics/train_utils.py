@@ -1,18 +1,25 @@
 from collections.abc import Callable
 import os
 import math
+from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn as nn
-from einops import rearrange, einsum, reduce
+from einops import rearrange
+from einops import einsum
+from einops import reduce
 from jaxtyping import Float
 from jaxtyping import Int
 from typing import Iterable
 import typing 
 
 
+@dataclass
+class CrossEntropy:
+    loss: Float[torch.Tensor, ""]
+    z_loss: Float[torch.Tensor | None, ""] = None
 
-def cross_entropy(logits: Float[torch.Tensor, "... vocab_size"], target: Int[torch.Tensor, "..."]) -> Float[torch.Tensor, ""]:
+def cross_entropy(logits: Float[torch.Tensor, "... vocab_size"], target: Int[torch.Tensor, "..."], return_z_loss: bool=False) -> CrossEntropy:
     logits = logits.to(torch.float32)
     max_logits = reduce(logits, "... vocab_size -> ... 1", "max")
     logits = logits - max_logits
@@ -20,9 +27,14 @@ def cross_entropy(logits: Float[torch.Tensor, "... vocab_size"], target: Int[tor
     logit_sum_exp = reduce(logit_exp, "... vocab_size -> ... 1", "sum")
     target = rearrange(target, "... -> ... 1")
     target_logits = torch.gather(logits, dim=-1, index=target)
-    loss = - target_logits + torch.log(logit_sum_exp)
+    log_sum_exp = torch.log(logit_sum_exp)
+    loss = - target_logits + log_sum_exp
     loss = reduce(loss, "... 1 -> 1", "mean")
-    return loss
+    if return_z_loss:
+        log_logit_sq = torch.square(log_sum_exp + max_logits)
+        z_loss = reduce(log_logit_sq, "... 1 -> 1", "mean")
+        return CrossEntropy(loss, z_loss)
+    return CrossEntropy(loss)
 
 
 def perplexity(losses: Float[torch.Tensor, "..."]) -> Float[torch.Tensor, ""]:
@@ -166,12 +178,12 @@ if __name__ == "__main__":
     # Target token IDs at each position
     targets = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len))
 
-    loss = cross_entropy(logits, targets)
-    print(loss)
+    ce_loss = cross_entropy(logits, targets)
+    print(ce_loss.loss)
 
     loss_ = torch.nn.functional.cross_entropy(logits.transpose(-2, -1), targets)
     print(loss_)
-    assert torch.allclose(loss, loss_)
+    assert torch.allclose(ce_loss.loss, loss_)
 
     x = torch.randn(seq_len)
     ppl = perplexity(x)

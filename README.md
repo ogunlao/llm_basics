@@ -11,9 +11,8 @@ llm_basics/
 │   └── moe_layers.py       # Switch Transformer MoE block and SwitchTransformerLM
 ├── tokenizer/
 │   ├── load_bpe.py         # Tokenizer: encode / decode using a trained vocab + merges
-│   ├── text_loading.py     # Parallel, chunked pre-tokenization of large text files
-│   └── text_loading_slow.py # Serial reference version of the pre-tokenization
-├── train_bpe.py            # BPE tokenizer training (fast heap-based + slow reference version)
+│   └── text_loading.py     # Parallel, chunked pre-tokenization of large text files
+├── train_bpe.py            # BPE tokenizer training (heap-based)
 ├── train_utils.py          # Cross-entropy, AdamW, LR schedule, gradient clipping, batching, checkpoints
 ├── trainer_dense.py        # Training loop for the dense model (entry point)
 ├── trainer_moe.py          # Training loop for the MoE model (entry point)
