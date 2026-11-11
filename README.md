@@ -1,6 +1,6 @@
 # From Scratch Implementation of Decoder-Style LLM. 
 
-It includes a byte-level BPE tokenizer, a Transformer LM (RMSNorm, SwiGLU, RoPE, causal multi-head self-attention), Switch Transformer MOE LLM, an AdamW optimizer, a cosine learning-rate schedule, gradient clipping, a training loop with checkpointing, and greedy/top-p decoding with KV caching.
+It includes a byte-level BPE tokenizer, a Transformer LM (RMSNorm, SwiGLU, RoPE, causal multi-head self-attention), Switch Transformer MOE LLM, an AdamW optimizer, a cosine learning-rate schedule, gradient clipping, a training loop with checkpointing, greedy/top-p decoding with KV caching, and an option for QK normalisation.
 
 ## Project structure
 

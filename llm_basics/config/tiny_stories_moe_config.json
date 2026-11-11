@@ -30,5 +30,6 @@
  "do_validation": true,
  "validation_steps": 50,
  "resume_from_checkpoint": null,
- "z_loss_weight": null
+ "z_loss_weight": null,
+ "use_qk_norm": false
 }

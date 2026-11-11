@@ -156,7 +156,7 @@ def scaled_dot_product_attention(
 
 
 class MHSA(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, rope_emb: nn.Module | None=None, device: torch.device | None=None, dtype: torch.dtype | None=None, context_length: int | None=None) -> None:
+    def __init__(self, d_model: int, num_heads: int, rope_emb: nn.Module | None=None, device: torch.device | None=None, dtype: torch.dtype | None=None, context_length: int | None=None, use_qk_norm: bool=False,) -> None:
         super().__init__()
         self.num_heads = num_heads
         d_k = d_model // num_heads
@@ -170,11 +170,16 @@ class MHSA(nn.Module):
             self.context_length = self.rope_emb.max_seq_len
         self.register_buffer("kv_cache", None, persistent=False)
         self.cache_len = 0
+        self.use_qk_norm = use_qk_norm
+        if use_qk_norm:
+            self.q_norm = RMSNorm(d_k, device=device, dtype=dtype)
+            self.k_norm = RMSNorm(d_k, device=device, dtype=dtype)
 
     def forward(self, x: Float[torch.Tensor, "... seq_len d_model"], token_pos=None, mask: Bool[torch.Tensor | None, "seq_len seq_len"]=None, use_cache: bool=False) -> Float[torch.Tensor, "... seq_len d_model"]:
         seq_len = x.shape[-2]
 
         # Add kv caching for inference
+        use_cache = use_cache and not self.training
         if use_cache:
             qkv = self.qkv_proj(x)
             qkv = rearrange(qkv, "... seq_len (three h d_k) -> three ... h seq_len d_k", h=self.num_heads, three=3)
@@ -200,6 +205,9 @@ class MHSA(nn.Module):
             self.cache_len = curr_seq_len + seq_len
 
             k, v = self.kv_cache[..., :self.cache_len, :]
+            if self.use_qk_norm:
+                q = self.q_norm(q)
+                k = self.k_norm(k)
 
             if self.rope_emb is not None:
                 # cannot exceed max len of rope embeddings
@@ -215,6 +223,9 @@ class MHSA(nn.Module):
         else:
             qkv = self.qkv_proj(x)
             q, k, v = rearrange(qkv, "... seq_len (three h d_k) -> three ... h seq_len d_k", h=self.num_heads, three=3)
+            if self.use_qk_norm:
+                q = self.q_norm(q)
+                k = self.k_norm(k)
 
             if self.rope_emb is not None:
                 # Using RoPE embeddings
@@ -243,10 +254,10 @@ class MHSA(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, rope_emb: nn.Module | None, device: torch.device | None=None, dtype: torch.dtype | None=None, context_length: int | None=None):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, rope_emb: nn.Module | None, device: torch.device | None=None, dtype: torch.dtype | None=None, context_length: int | None=None, use_qk_norm: bool=False):
         super().__init__()
         self.rms_norm1 = RMSNorm(d_model, device=device, dtype=dtype)
-        self.mhsa = MHSA(d_model, num_heads, rope_emb, device=device, dtype=dtype, context_length=context_length)
+        self.mhsa = MHSA(d_model, num_heads, rope_emb, device=device, dtype=dtype, context_length=context_length, use_qk_norm=use_qk_norm)
         self.rms_norm2 = RMSNorm(d_model, device=device, dtype=dtype)
         self.ffn = SwiGLU(d_model, d_ff, device, dtype)
 
@@ -262,14 +273,14 @@ class TransformerBlock(nn.Module):
         return x
 
 class TransformerLM(nn.Module):
-    def __init__(self, vocab_size: int, num_layers:int, d_model: int, num_heads: int, d_ff: int, context_length: int, theta: float | None=None, device: torch.device | None=None, dtype: torch.dtype | None=None):
+    def __init__(self, vocab_size: int, num_layers:int, d_model: int, num_heads: int, d_ff: int, context_length: int, theta: float | None=None, device: torch.device | None=None, dtype: torch.dtype | None=None, use_qk_norm: bool=False,):
         super().__init__()
         self.emb = Embedding(vocab_size, d_model, device, dtype)
         self.rope_emb = None
         if theta is not None:
             self.rope_emb = RotaryPositionalEmbedding(theta, d_model//num_heads, context_length, device)
         self.layers = nn.ModuleList(
-            TransformerBlock(d_model, num_heads, d_ff, self.rope_emb, device, dtype, context_length) for _ in range(num_layers))
+            TransformerBlock(d_model, num_heads, d_ff, self.rope_emb, device, dtype, context_length, use_qk_norm) for _ in range(num_layers))
         self.rms_norm_final = RMSNorm(d_model, device=device, dtype=dtype)
         self.out_proj = Linear(d_model, vocab_size, device, dtype)
 

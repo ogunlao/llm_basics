@@ -39,12 +39,12 @@ def load_model(config: ModelConfig | MoEModelConfig, checkpoint_path: str) -> to
             config.num_experts, config.capacity_factor,
             config.vocab_size, config.num_layers, config.d_model, config.num_heads,
             config.d_ff, config.context_length, config.theta,
-            jitter_noise=config.jitter_noise, device=config.device,
+            jitter_noise=config.jitter_noise, device=config.device, use_qk_norm=config.use_qk_norm,
         )
     else:
         model = TransformerLM(
             config.vocab_size, config.num_layers, config.d_model, config.num_heads,
-            config.d_ff, config.context_length, config.theta, config.device,
+            config.d_ff, config.context_length, config.theta, config.device, use_qk_norm=config.use_qk_norm,
         )
     _ = load_checkpoint(checkpoint_path, model, None, config.device)
     model.eval()

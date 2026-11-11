@@ -73,6 +73,7 @@ class ModelConfig:
     validation_steps: int | None = 20
     resume_from_checkpoint: str | None = None
     z_loss_weight: float | None = None # 1e-4 / 1e-5
+    use_qk_norm: bool = False
 
     def update_from_dict(self, data: dict[str, Any]) -> None:
         valid_names = {f.name for f in fields(self)}
@@ -113,7 +114,7 @@ def train(config):
                                 config.vocab_size, config.num_layers, config.d_model, 
                                 config.num_heads, config.d_ff, config.context_length, 
                                 config.theta, jitter_noise=config.jitter_noise,
-                                device=config.device, dtype=dtype,
+                                device=config.device, dtype=dtype, use_qk_norm=config.use_qk_norm,
                           )
     model.apply(init_layer)
     logging.debug(model)

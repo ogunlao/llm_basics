@@ -15,10 +15,10 @@ from llm_basics.layers import Embedding
 
 
 class SwitchBlock(nn.Module):
-    def __init__(self, num_experts: int, capacity_factor: float | None, d_model: int, num_heads: int, d_ff: int, rope_emb: nn.Module | None, jitter_noise: float = 1e-2, device: torch.device | None=None, dtype: torch.dtype | None=None, context_length: int | None=None,):
+    def __init__(self, num_experts: int, capacity_factor: float | None, d_model: int, num_heads: int, d_ff: int, rope_emb: nn.Module | None, jitter_noise: float = 1e-2, device: torch.device | None=None, dtype: torch.dtype | None=None, context_length: int | None=None, use_qk_norm: bool=False,):
         super().__init__()
         self.rms_norm1 = RMSNorm(d_model, device=device, dtype=dtype)
-        self.mhsa = MHSA(d_model, num_heads, rope_emb, device=device, dtype=dtype, context_length=context_length)
+        self.mhsa = MHSA(d_model, num_heads, rope_emb, device=device, dtype=dtype, context_length=context_length, use_qk_norm=use_qk_norm)
         self.rms_norm2 = RMSNorm(d_model, device=device, dtype=dtype)
         self.experts = nn.ModuleList([SwiGLU(d_model, d_ff, device, dtype) for _ in range(num_experts)])
         self.router = Linear(d_model, num_experts, device=device, dtype=torch.float32)
@@ -109,13 +109,13 @@ class SwitchBlock(nn.Module):
 
 
 class SwitchTransformerLM(nn.Module):
-    def __init__(self, num_experts: int, capacity_factor: float | None, vocab_size: int, num_layers: int, d_model: int, num_heads: int, d_ff: int, context_length: int, theta: float | None=None, jitter_noise: float = 1e-2, device: torch.device | None=None, dtype: torch.dtype | None=None):
+    def __init__(self, num_experts: int, capacity_factor: float | None, vocab_size: int, num_layers: int, d_model: int, num_heads: int, d_ff: int, context_length: int, theta: float | None=None, jitter_noise: float = 1e-2, device: torch.device | None=None, dtype: torch.dtype | None=None, use_qk_norm: bool=False,):
         super().__init__()
         self.emb = Embedding(vocab_size, d_model, device, dtype)
         self.rope_emb = None
         if theta is not None:
             self.rope_emb = RotaryPositionalEmbedding(theta, d_model//num_heads, context_length, device)
-        self.layers = nn.ModuleList(SwitchBlock(num_experts, capacity_factor, d_model, num_heads, d_ff, self.rope_emb, jitter_noise, device, dtype, context_length) for _ in range(num_layers))
+        self.layers = nn.ModuleList(SwitchBlock(num_experts, capacity_factor, d_model, num_heads, d_ff, self.rope_emb, jitter_noise, device, dtype, context_length, use_qk_norm,) for _ in range(num_layers))
         self.rms_norm_final = RMSNorm(d_model, device=device, dtype=dtype)
         self.out_proj = Linear(d_model, vocab_size, device, dtype)
 

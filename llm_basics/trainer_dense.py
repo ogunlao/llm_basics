@@ -59,6 +59,7 @@ class ModelConfig:
     validation_steps: int | None = 20
     resume_from_checkpoint: str | None = None
     z_loss_weight: float | None = None # 1e-4 / 1e-5
+    use_qk_norm: bool = False
 
     def update_from_dict(self, data: dict[str, Any]) -> None:
         valid_names = {f.name for f in fields(self)}
@@ -97,7 +98,7 @@ def train(config):
     # model
     model = TransformerLM(config.vocab_size, config.num_layers, config.d_model, 
                           config.num_heads, config.d_ff, config.context_length, 
-                          config.theta, config.device, dtype,
+                          config.theta, config.device, dtype, use_qk_norm=config.use_qk_norm,
                           )
     logging.debug(model)
     total_params = sum(list(param.numel() for param in model.parameters()))
