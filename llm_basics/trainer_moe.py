@@ -20,7 +20,7 @@ from llm_basics.train_utils import lr_cosine_schedule
 from llm_basics.train_utils import AdamW
 from llm_basics.train_utils import load_checkpoint
 from llm_basics.train_utils import save_checkpoint
-
+from llm_basics.train_utils import convert_dtype
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -68,6 +68,7 @@ class ModelConfig:
     warm_up_iter: int = 2000
     max_l2_norm: float = 2.0
     grad_accumulation: int = 1
+    loss_scale_growth_interval: int = 2000
 
     do_validation: bool = True
     validation_steps: int | None = 20
@@ -88,18 +89,6 @@ class ModelConfig:
         if self.grad_accumulation is None:
             self.grad_accumulation = 1
 
-def convert_dtype(dtype: str):
-    if dtype is None:
-        return None
-    if isinstance(dtype, str):
-        if dtype == "bfloat16":
-            return torch.bfloat16
-        elif dtype == "fp16":
-            return torch.float16
-        elif dtype in ["float", "float32"]:
-            return torch.float32
-        else: raise ValueError("Unknown datatype, select from bfloat16, fp16 or float32")
-
 
 def train(config):
     # load dataset from disk
@@ -109,12 +98,16 @@ def train(config):
     mask = torch.tril(mask, diagonal=0)
 
     dtype = convert_dtype(config.dtype)
+    # fp16 needs to keep the weights in float32 and then can run the forward pass in fp16 with autocast
+    use_fp16 = (dtype == torch.float16)
+    model_dtype = None if use_fp16 else dtype
+    device_type = torch.device(config.device).type
     # model
     model = SwitchTransformerLM(config.num_experts, config.capacity_factor, 
                                 config.vocab_size, config.num_layers, config.d_model, 
                                 config.num_heads, config.d_ff, config.context_length, 
                                 config.theta, jitter_noise=config.jitter_noise,
-                                device=config.device, dtype=dtype, use_qk_norm=config.use_qk_norm,
+                                device=config.device, dtype=model_dtype, use_qk_norm=config.use_qk_norm,
                           )
     model.apply(init_layer)
     logging.debug(model)
@@ -125,9 +118,16 @@ def train(config):
     last_step = 0
     # optimizer
     opt = AdamW(model.parameters(), config.lr, config.weight_decay, (config.beta1, config.beta2))
+    loss_scale = torch.tensor(65536.0, device=config.device) if use_fp16 else None
+    inv_loss_scale = torch.empty((), device=config.device) if loss_scale is not None else None
+    found_inf = torch.zeros((), device=config.device) if loss_scale is not None else None
+    growth_tracker = 0
     if config.resume_from_checkpoint:
         logging.info(f"Resuming from saved checkpoint: {config.resume_from_checkpoint}")
-        last_step = load_checkpoint(config.resume_from_checkpoint, model, opt)
+        last_step, loss_scale_state = load_checkpoint(config.resume_from_checkpoint, model, opt, return_loss_scale=True)
+        if loss_scale is not None and loss_scale_state is not None:
+            loss_scale.fill_(loss_scale_state["scale"])
+            growth_tracker = loss_scale_state["growth_tracker"]
     save_every = config.save_every
     
     os.makedirs(config.checkpoint_path, exist_ok=True)
@@ -145,7 +145,8 @@ def train(config):
             z_losses = []
             for i in range(config.grad_accumulation):
                 inputs, target = get_batch(train_dataset, config.batch_size, config.context_length, config.device)
-                logits, train_aux_loss = model(inputs, mask=mask)
+                with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=use_fp16):
+                    logits, train_aux_loss = model(inputs, mask=mask)
                 ce = cross_entropy(logits, target, config.z_loss_weight is not None)
 
                 train_loss = ce.loss
@@ -158,13 +159,39 @@ def train(config):
                     total_train_loss += config.z_loss_weight * z_loss
                     z_losses.append(z_loss.detach())
                 
-                # Scale loss
-                total_train_loss.backward()
+                if loss_scale is not None:
+                    (total_train_loss * loss_scale).backward()
+                else:
+                    total_train_loss.backward()
                 train_losses.append(train_loss.detach())
                 train_aux_losses.append(train_aux_loss.detach())
 
-            grad_norm = gradient_clipping(model.parameters(), config.max_l2_norm)
-            opt.step()
+            step_skipped = False
+            if loss_scale is not None:
+                found_inf.zero_()
+                torch.reciprocal(loss_scale, out=inv_loss_scale)
+                grads_by_dtype = {}
+                for param in model.parameters():
+                    if param.grad is not None:
+                        grads_by_dtype.setdefault(param.grad.dtype, []).append(param.grad)
+                for grads in grads_by_dtype.values():
+                    torch._amp_foreach_non_finite_check_and_unscale_(
+                        grads, found_inf, inv_loss_scale,
+                    )
+                step_skipped = bool(found_inf.item())
+
+            if step_skipped:
+                loss_scale.mul_(0.5).clamp_(min=1.0)
+                growth_tracker = 0
+                grad_norm = torch.full((), float("inf"), device=config.device)
+            else:
+                grad_norm = gradient_clipping(model.parameters(), config.max_l2_norm)
+                opt.step()
+                if loss_scale is not None:
+                    growth_tracker += 1
+                    if growth_tracker == config.loss_scale_growth_interval:
+                        loss_scale.mul_(2.0)
+                        growth_tracker = 0
             opt.zero_grad()
             print(f"{step},{"grad_norm"},{grad_norm.item()}", file=file_writer)
             train_loss = torch.stack(train_losses).sum(dim=0)
@@ -187,7 +214,8 @@ def train(config):
                 with torch.no_grad():
                     for _ in range(config.validation_steps):
                         val_inputs, val_target = get_batch(valid_dataset, config.batch_size, config.context_length, config.device)
-                        val_logits, validation_aux_loss = model(val_inputs, mask=mask)
+                        with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=use_fp16):
+                            val_logits, validation_aux_loss = model(val_inputs, mask=mask)
                         _val_loss = cross_entropy(val_logits, val_target)
                         val_loss += _val_loss.loss
                         val_aux_loss += validation_aux_loss
@@ -204,7 +232,10 @@ def train(config):
             if (step + 1) % save_every == 0:
                 output_file = f"{config.name}_model_ckpt_{time.time()}_step={step + 1}_val_loss={val_loss}.pt"
                 full_save_path = os.path.join(config.checkpoint_path, output_file)
-                save_checkpoint(model, opt, step + 1, full_save_path)
+                loss_scale_state = None
+                if loss_scale is not None:
+                    loss_scale_state = {"scale": loss_scale.item(), "growth_tracker": growth_tracker}
+                save_checkpoint(model, opt, step + 1, full_save_path, loss_scale_state)
                 logging.info(f"Saving checkpoint at iteration {step} in {output_file}...")
 
             print(f"{step},{"elapsed_time"},{time.perf_counter() - start_time}", file=file_writer)

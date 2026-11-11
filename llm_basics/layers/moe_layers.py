@@ -41,8 +41,9 @@ class SwitchBlock(nn.Module):
             # Add some noise for exploration across experts
             random_noise = torch.zeros_like(x_router).uniform_(1 - self.jitter_noise, 1 + self.jitter_noise)
             x_router = x_router * random_noise.to(x_router.device)
-        # Router logits and selection in float32 for numerical stability
-        router_logits = self.router(x_router)
+        # Router logits and selection in float32 for numerical stability, also under fp16 autocast
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            router_logits = self.router(x_router)
 
         router_probs = softmax(router_logits, dim=-1)
         

@@ -1,7 +1,7 @@
-from collections.abc import Callable
 import os
 import math
 from dataclasses import dataclass
+from collections.abc import Callable
 import numpy as np
 import torch
 import torch.nn as nn
@@ -145,13 +145,14 @@ def get_batch(
     return x, y
 
 
-def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, iteration: int, out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]):
+def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, iteration: int, out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes], loss_scale_state: dict | None = None):
     # Unwrap torch.compile so saved keys don't carry the "_orig_mod." prefix
     model = getattr(model, "_orig_mod", model)
     checkpoint = {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "step": iteration,
+        "loss_scale": loss_scale_state, # fp16 loss scale and growth tracker
     }
     torch.save(checkpoint, out)
 
@@ -160,13 +161,29 @@ def load_checkpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
                     model: nn.Module, 
                     optimizer: torch.optim.Optimizer | None = None,
                     map_location: str | None = None,
+                    return_loss_scale: bool = False,
                     ):
     checkpoints = torch.load(src, map_location=map_location)
     model.load_state_dict(checkpoints["model"], strict=True)
     if optimizer is not None:
         optimizer.load_state_dict(checkpoints["optimizer"])
 
+    if return_loss_scale:
+        return checkpoints["step"], checkpoints["loss_scale"]
     return checkpoints["step"]
+
+
+def convert_dtype(dtype: str):
+    if dtype is None:
+        return None
+    if isinstance(dtype, str):
+        if dtype == "bfloat16":
+            return torch.bfloat16
+        elif dtype == "fp16":
+            return torch.float16
+        elif dtype in ["float", "float32"]:
+            return torch.float32
+        else: raise ValueError("Unknown datatype, select from bfloat16, fp16 or float32")
 
 
 if __name__ == "__main__":

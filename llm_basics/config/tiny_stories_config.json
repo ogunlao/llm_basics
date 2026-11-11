@@ -27,5 +27,6 @@
  "validation_steps": 50,
  "resume_from_checkpoint": null,
  "z_loss_weight": null,
- "use_qk_norm": false
+ "use_qk_norm": false,
+ "loss_scale_growth_interval": 2000
 }
